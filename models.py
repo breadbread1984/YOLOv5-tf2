@@ -59,6 +59,19 @@ def YOLOv5(input_shape = (608, 608, 3), class_num = 80, anchor_num = 3):
   pool3 = tf.keras.layers.MaxPool2D(pool_size = (5, 5), strides = (1, 1), padding = 'same')(large);
   results = tf.keras.layers.Concatenate(axis = -1)([pool1, pool2, pool3, large]);
   results = ConvBlockMish(results.shape[1:], 512, (1, 1))(results);
-  results = ResBlock(results.shape[1:], filters = 512, blocks = 1, output_filters = 256, output_kernel = (1, 1))(results);
+  large_feature = ResBlock(results.shape[1:], filters = 512, blocks = 1, output_filters = 256, output_kernel = (1, 1))(results);
+  results = tf.keras.layers.UpSampling2D(2, interpolation = 'nearest')(large_feature);
+  raw_middle_feature = ConvBlockLeakyReLU(results.shape[1:], 256, (1, 1))(results);
+  results = tf.keras.layers.Concatenate(axis = -1)([results, raw_middle_feature]);
+  results = ConvBlockLeakyReLU(results.shape[1:], 256, (1, 1))(results);
+  middle_feature = ResBlock(results.shape[1:], filters = 256, blocks = 1, output_filters = 128, output_kernel = (1, 1))(results);
+  results = tf.keras.layers.UpSampling2D(2, interpolation = 'nearest')(middle_feature);
+  raw_small_feature = ConvBlockLeakyReLU(results.shape[1:], 128, (1, 1))(results);
+  results = tf.keras.layers.Concatenate(axis = -1)([results, raw_small_features]);
+  results = ConvBlockLeakyReLU(results.shape[1:], 128, (1, 1))(results);
+  small_feature = ResBlock(results.shape[1:], filters = 128, blocks = 1, output_filters = 128, output_kernel = (1, 1))(results);
+  # 1) output predicts of all scales
+  # output predicts for small scale targets
+  small_predicts = ConvBlockLeakyReLU(small_feature.shape[1:], 3 * (class_num + 5), (1, 1))(small_feature);
   
   
