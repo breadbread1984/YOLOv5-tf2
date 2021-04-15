@@ -73,5 +73,9 @@ def YOLOv5(input_shape = (608, 608, 3), class_num = 80, anchor_num = 3):
   # 1) output predicts of all scales
   # output predicts for small scale targets
   small_predicts = ConvBlockLeakyReLU(small_feature.shape[1:], 3 * (class_num + 5), (1, 1))(small_feature);
-  
+  small_predicts = tf.keras.layers.Reshape((input_shape[0] // 8, input_shape[1] // 8, anchor_num, 5 + class_num), name = 'output3')(small_predicts);
+  # output predicts for middle scale targets
+  results = ConvBlockLeakyReLU(small_feature.shape[1:], filters = 128, (3, 3))(small_feature);
+  middle_results = ConvBlockLeakyReLU(middle.shape[1:], filters = 256, (1, 1))(middle);
+  results = tf.keras.layers.Concatenate(axis = -1)([results, middle_results]);
   
