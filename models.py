@@ -48,17 +48,17 @@ def Body(input_shape):
   rb1 = ResBlock(cb.shape[1:], filters = 64, blocks = 1, output_filters = 128, output_kernel = (3, 3))(cb); # rb1.shape = (batch, h, w, 128)
   rb2 = ResBlock(rb1.shape[1:], filters = 128, blocks = 3, output_filters = 256, output_kernel = (3, 3))(rb1); # rb2.shape = (batch, h, w, 256)
   rb3 = ResBlock(rb2.shape[1:], filters = 256, blocks = 3, output_filters = 512, output_kernel = (3, 3))(rb2); # rb3.shape = (batch, h, w, 512)
-  pool1 = tf.keras.layers.MaxPool2D(pool_size = (13, 13), strides = (1, 1), padding = 'same')(rb3);
-  pool2 = tf.keras.layers.MaxPool2D(pool_size = (9, 9), strides = (1, 1), padding = 'same')(rb3);
-  pool3 = tf.keras.layers.MaxPool2D(pool_size = (5, 5), strides = (1, 1), padding = 'same')(rb3);
-  results = tf.keras.layers.Concatenate(axis = -1)([pool1, pool2, pool3, rb3]);
-  results = ConvBlockMish(results.shape[1:], 512, (1, 1))(results);
-  return tf.keras.Model(inputs = inputs, outputs = (rb1, rb2, rb3, results));
+  return tf.keras.Model(inputs = inputs, outputs = (rb1, rb2, rb3));
 
 def YOLOv5(input_shape = (608, 608, 3), class_num = 80, anchor_num = 3):
 
   inputs = tf.keras.Input(shape = input_shape);
-  small, middle, large, results = Body(inputs.shape[1:])(inputs);
+  small, middle, large = Body(inputs.shape[1:])(inputs);
+  pool1 = tf.keras.layers.MaxPool2D(pool_size = (13, 13), strides = (1, 1), padding = 'same')(large);
+  pool2 = tf.keras.layers.MaxPool2D(pool_size = (9, 9), strides = (1, 1), padding = 'same')(large);
+  pool3 = tf.keras.layers.MaxPool2D(pool_size = (5, 5), strides = (1, 1), padding = 'same')(large);
+  results = tf.keras.layers.Concatenate(axis = -1)([pool1, pool2, pool3, large]);
+  results = ConvBlockMish(results.shape[1:], 512, (1, 1))(results);
   results = ResBlock(results.shape[1:], filters = 512, blocks = 1, output_filters = 256, output_kernel = (1, 1))(results);
   
   
