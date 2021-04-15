@@ -67,7 +67,7 @@ def YOLOv5(input_shape = (608, 608, 3), class_num = 80, anchor_num = 3):
   middle_feature = ResBlock(results.shape[1:], filters = 256, blocks = 1, output_filters = 128, output_kernel = (1, 1))(results);
   results = tf.keras.layers.UpSampling2D(2, interpolation = 'nearest')(middle_feature);
   raw_small_feature = ConvBlockLeakyReLU(results.shape[1:], 128, (1, 1))(results);
-  results = tf.keras.layers.Concatenate(axis = -1)([results, raw_small_features]);
+  results = tf.keras.layers.Concatenate(axis = -1)([results, raw_small_feature]);
   small_feature = ConvBlockLeakyReLU(results.shape[1:], 128, (1, 1))(results);
   results = ResBlock(small_feature.shape[1:], filters = 128, blocks = 1, output_filters = 128, output_kernel = (1, 1), downsample = True)(small_feature);
   # 1) output predicts of all scales
@@ -80,10 +80,18 @@ def YOLOv5(input_shape = (608, 608, 3), class_num = 80, anchor_num = 3):
   results = tf.keras.layers.Concatenate(axis = -1)([results, middle_results]);
   middle_feature = ConvBlockLeakyReLU(results.shape[1:], 256, (1, 1))(results);
   results = ResBlock(middle_feature.shape[1:], filters = 256, blocks = 1, output_filters = 256, output_kernel = (1, 1), downsample = True)(middle_feature);
-  middle_predicts = ConvBlockLeakyReLU(results.shape[1:], 3 * (class_num + 5), (1, 1), activate = False, bn = False))(results);
+  middle_predicts = ConvBlockLeakyReLU(results.shape[1:], 3 * (class_num + 5), (1, 1), activate = False, bn = False)(results);
   middle_predicts = tf.keras.layers.Reshape((input_shape[0] // 16, input_shape[1] // 16, anchor_num, 5 + class_num), name = 'output2')(middle_predicts);
   # output predicts for large scale targets
   results = ConvBlockLeakyReLU(middle_feature.shape[1:], 256, (3, 3), strides = (2, 2))(middle_feature);
   large_results = ConvBlockLeakyReLU(large.shape[1:], 512, (1, 1))(large);
   results = tf.keras.layers.Concatenate(axis = -1)([results, large_results]);
-  large_feature = 
+  large_feature = ConvBlockLeakyReLU(results.shape[1:], 512, (1, 1))(results);
+  results = ResBlock(large_feature.shape[1:], filters = 512, blocks = 1, output_filters = 512, output_kernel = (1, 1), downsample = True)(large_feature);
+  large_predicts = ConvBlockLeakyReLU(results.shape[1:], 3 * (class_num + 5), (1, 1), activate = False, bn = False)(results);
+  large_predicts = tf.keras.layers.Reshape((input_shape[0] // 32, input_shape[1] // 32, anchor_num, 5 + class_num), name = 'output1')(large_predicts);
+  return tf.keras.Model(inputs = inputs, outputs = (large_predicts, middle_predicts, small_predicts));
+
+if __name__ == "__main__":
+  yolov5 = YOLOv5();
+  yolov5.save('yolov5.h5');
