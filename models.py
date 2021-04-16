@@ -31,7 +31,7 @@ def ConvBlockLeakyReLU(input_shape, filters, kernel_size, strides = (1, 1), acti
   else:
     padding = 'same';
   # NOTE: use bias when batchnorm is not used
-  results = tf.keras.layers.Conv2D(filters, kernel_size = kernel_size, strides = strides, padding = padding, use_bias = not bn)(inputs);
+  results = tf.keras.layers.Conv2D(filters, kernel_size = kernel_size, strides = strides, padding = padding, use_bias = not bn)(results);
   if bn == True: results = tf.keras.layers.BatchNormalization()(results);
   # NOTE: leak relu
   if activate == True: results = tf.keras.layers.LeakyReLU(alpha = 0.1)(results);
@@ -64,21 +64,21 @@ def Body(input_shape):
 
 def YOLOv5(input_shape = (608, 608, 3), class_num = 80, anchor_num = 3):
 
-  inputs = tf.keras.Input(shape = input_shape);
-  small, middle, large = Body(inputs.shape[1:])(inputs);
-  pool1 = tf.keras.layers.MaxPool2D(pool_size = (13, 13), strides = (1, 1), padding = 'same')(large);
-  pool2 = tf.keras.layers.MaxPool2D(pool_size = (9, 9), strides = (1, 1), padding = 'same')(large);
-  pool3 = tf.keras.layers.MaxPool2D(pool_size = (5, 5), strides = (1, 1), padding = 'same')(large);
-  results = tf.keras.layers.Concatenate(axis = -1)([pool1, pool2, pool3, large]);
-  results = ConvBlockMish(results.shape[1:], 512, (1, 1), (2, 2))(results);
-  large_feature = ResBlock(results.shape[1:], filters = 512, blocks = 1, output_filters = 256, output_kernel = (1, 1))(results);
-  results = tf.keras.layers.UpSampling2D(2, interpolation = 'nearest')(large_feature);
-  raw_middle_feature = ConvBlockLeakyReLU(results.shape[1:], 256, (1, 1))(results);
-  results = tf.keras.layers.Concatenate(axis = -1)([results, raw_middle_feature]);
+  inputs = tf.keras.Input(shape = input_shape); # inputs.shape = (batch, h, w, 3)
+  small, middle, large = Body(inputs.shape[1:])(inputs); # small.shape = (batch, h / 4, w / 4, 128), middle.shape = (batch, h / 8, w / 8, 256), large.shape = (batch, h / 16, w / 16, 512)
+  pool1 = tf.keras.layers.MaxPool2D(pool_size = (13, 13), strides = (1, 1), padding = 'same')(large); # pool1.shape = (batch, h / 16, w / 16, 512)
+  pool2 = tf.keras.layers.MaxPool2D(pool_size = (9, 9), strides = (1, 1), padding = 'same')(large); # pool2.shape = (batch, h / 16, w / 16, 512)
+  pool3 = tf.keras.layers.MaxPool2D(pool_size = (5, 5), strides = (1, 1), padding = 'same')(large); # pool3.shape = (batch, h / 16, w / 16, 512)
+  results = tf.keras.layers.Concatenate(axis = -1)([pool1, pool2, pool3, large]); # results.shape = (batch, h / 16, w / 16, 2048)
+  results = ConvBlockMish(results.shape[1:], 512, (1, 1), (2, 2))(results); # results.shape = (batch, h / 32, w / 32, 512)
+  large_feature = ResBlock(results.shape[1:], filters = 512, blocks = 1, output_filters = 256, output_kernel = (1, 1))(results); # large_feature.shape = (batch, h / 32, w / 32, 256)
+  results = tf.keras.layers.UpSampling2D(2, interpolation = 'nearest')(large_feature); # results.shape = (batch, h / 16, w / 16, 256)
+  raw_middle_feature = ConvBlockLeakyReLU(results.shape[1:], 256, (1, 1))(middle); # raw_middle_feature.shape = (batch, h / 8, w / 8, 256)
+  results = tf.keras.layers.Concatenate(axis = -1)([results, raw_middle_feature]); # results.shape = (batch, )
   results = ConvBlockLeakyReLU(results.shape[1:], 256, (1, 1))(results);
   middle_feature = ResBlock(results.shape[1:], filters = 256, blocks = 1, output_filters = 128, output_kernel = (1, 1))(results);
   results = tf.keras.layers.UpSampling2D(2, interpolation = 'nearest')(middle_feature);
-  raw_small_feature = ConvBlockLeakyReLU(results.shape[1:], 128, (1, 1))(results);
+  raw_small_feature = ConvBlockLeakyReLU(results.shape[1:], 128, (1, 1))(small); # raw_small_feature.shape = ()
   results = tf.keras.layers.Concatenate(axis = -1)([results, raw_small_feature]);
   small_feature = ConvBlockLeakyReLU(results.shape[1:], 128, (1, 1))(results);
   results = ResBlock(small_feature.shape[1:], filters = 128, blocks = 1, output_filters = 128, output_kernel = (1, 1), downsample = True)(small_feature);
