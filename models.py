@@ -176,7 +176,6 @@ def Loss(img_shape, layer, class_num = 80, ignore_thresh = 0.5):
   true_upperleft = tf.keras.layers.Lambda(lambda x: x[0] - x[1])([true_xy, true_half_wh]); # true_upperleft.shape = (batch, grid h, grid w, anchor_num, 2) in sequence of (xmin, ymin)
   true_bottomright = tf.keras.layers.Lambda(lambda x: x[0] + x[1])([true_xy, true_half_wh]); # true_bottomright.shape = (batch, grid h, grid w, anchor_num, 2) in sequence of (xmax, ymax)
   object_mask = tf.keras.layers.Lambda(lambda x: x[..., 4])(label_of_this_layer); # object_mask.shape = (batch, grid h, grid w, anchor_num)
-    
   object_mask_bool = tf.keras.layers.Lambda(lambda x: tf.cast(x, dtype = tf.bool))(object_mask); # object_mask_bool.shape = (batch, grid h, grid w, anchor_num)
   true_bbox = tf.keras.layers.Lambda(lambda x: tf.concat([tf.reverse(x[0], axis = [-1]), tf.reverse(x[1], axis = [-1])], axis = -1))([true_upperleft, true_bottomright]); # true_bbox.shape = (batch, grid h, grid w, anchor_num, 4) in sequence of (ymin, xmin, ymax, xmax)
   true_class = tf.keras.layers.Lambda(lambda x: x[..., 5:])(label_of_this_layer); # true_class.shape = (batch, grid h, grid w, anchor_num, class_num)
@@ -207,8 +206,7 @@ def Loss(img_shape, layer, class_num = 80, ignore_thresh = 0.5):
   # 4) position loss
   # NOTE: only punish foreground area
   # NOTE: punish smaller foreground targets more harshly
-  xy_loss = tf.keras.layers.Lambda(lambda x: x[0] * x[1] * tf.math.reduce_sum(tf.math.square(x[2] - x[3]), axis = -1))([object_mask, loss_scale, true_xy, pred_xy]); # xy_loss.shape = (batch, grid h, grid w, anchor_num)
-  wh_loss = tf.keras.layers.Lambda(lambda x: x[0] * x[1] * tf.math.reduce_sum(tf.math.square(x[2] - x[3]), axis = -1))([object_mask, loss_scale, true_wh, pred_wh]);
+  giou_loss = tf.keras.layers.Lambda(lambda x: x[0] * x[1] * tfa.losses.GIoULoss(mode = 'iou', reduction = tf.keras.losses.Reduction.NONE)(x[2], x[3]))([object_mask, loss_scale, true_bbox, pred_bbox]); # giou_loss.shape = (batch, grid h, grid w, anchor_num)
   # 5) confidence loss
   # NOTE: punish foreground area which is miss classified
   # NOTE: and punish background area which is far from foreground area and miss classified
@@ -229,7 +227,7 @@ def Loss(img_shape, layer, class_num = 80, ignore_thresh = 0.5):
       ), axis = -1)
     )([object_mask, true_class, pred_class]); # class_loss.shape = (batch, grid h, grid w, anchor_num)
   # 7) total
-  loss = tf.keras.layers.Lambda(lambda x: tf.math.reduce_mean(tf.math.reduce_sum(tf.math.add_n(x), axis = [1,2,3]), axis = [0]))([xy_loss, wh_loss, confidence_loss, class_loss]); # loss.shape = ()
+  loss = tf.keras.layers.Lambda(lambda x: tf.math.reduce_mean(tf.math.reduce_sum(tf.math.add_n(x), axis = [1,2,3]), axis = [0]))([giou_loss, confidence_loss, class_loss]); # loss.shape = ()
   return tf.keras.Model(inputs = (input_of_this_layer, label_of_this_layer), outputs = loss);
 
 if __name__ == "__main__":
