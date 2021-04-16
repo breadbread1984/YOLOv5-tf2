@@ -5,10 +5,16 @@ import tensorflow_addons as tfa;
 
 def ConvBlockMish(input_shape, filters, kernel_size, strides = (1, 1), activate = True, bn = True):
 
-  padding = 'valid' if strides == (2,2) else 'same';
   inputs = tf.keras.Input(input_shape);
+  results = inputs;
+  if strides == (2, 2):
+    padding = 'valid'
+    pad_h, pad_w = (kernel_size[0] - 2) // 2 + 1, (kernel_size[1] - 2) // 2 + 1;
+    results = tf.keras.layers.ZeroPadding2D(padding = ((pad_h, pad_h),(pad_w, pad_w)))(results);
+  else:
+    padding = 'same';
   # NOTE: use bias when batchnorm is not used
-  results = tf.keras.layers.Conv2D(filters, kernel_size = kernel_size, strides = strides, padding = padding, use_bias = not bn)(inputs);
+  results = tf.keras.layers.Conv2D(filters, kernel_size = kernel_size, strides = strides, padding = padding, use_bias = not bn)(results);
   if bn == True: results = tf.keras.layers.BatchNormalization()(results);
   # NOTE: mish
   if activate == True: results = tf.keras.layers.Lambda(lambda x: tfa.activations.mish(x))(results);
@@ -16,8 +22,14 @@ def ConvBlockMish(input_shape, filters, kernel_size, strides = (1, 1), activate 
 
 def ConvBlockLeakyReLU(input_shape, filters, kernel_size, strides = (1, 1), activate = True, bn = True):
   
-  padding = 'valid' if strides == (2,2) else 'same';
   inputs = tf.keras.Input(input_shape);
+  results = inputs;
+  if strides == (2, 2):
+    padding = 'valid'
+    pad_h, pad_w = (kernel_size[0] - 2) // 2 + 1, (kernel_size[1] - 2) // 2 + 1;
+    results = tf.keras.layers.ZeroPadding2D(padding = ((pad_h, pad_h),(pad_w, pad_w)))(results);
+  else:
+    padding = 'same';
   # NOTE: use bias when batchnorm is not used
   results = tf.keras.layers.Conv2D(filters, kernel_size = kernel_size, strides = strides, padding = padding, use_bias = not bn)(inputs);
   if bn == True: results = tf.keras.layers.BatchNormalization()(results);
@@ -28,9 +40,8 @@ def ConvBlockLeakyReLU(input_shape, filters, kernel_size, strides = (1, 1), acti
 def ResBlock(input_shape, filters, blocks, output_filters, output_kernel, downsample = False):
 
   inputs = tf.keras.Input(shape = input_shape);
-  results = tf.keras.layers.ZeroPadding2D(padding = ((1,0),(1,0)))(inputs);
-  results = ConvBlockMish(inputs.shape[1:], filters // 2, (1, 1))(results);
-  short = ConvBlockMish(inputs.shape[1:], filters // 2, (1, 1))(results);
+  results = ConvBlockMish(inputs.shape[1:], filters // 2, (1, 1))(inputs);
+  short = ConvBlockMish(inputs.shape[1:], filters // 2, (1, 1))(inputs);
   for i in range(blocks):
     block_short = results;
     results = ConvBlockMish(results.shape[1:], filters // 2, (1, 1))(results);
