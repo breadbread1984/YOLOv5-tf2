@@ -116,6 +116,122 @@ def YOLOv5_large(input_shape = (608, 608, 3), class_num = 80, anchor_num = 3):
 def YOLOv5_extend(input_shape = (608, 608, 3), class_num = 80, anchor_num = 3):
   return YOLOv5(input_shape, class_num, anchor_num, 80, 4);
 
+def OutputParser(input_shape, img_shape, anchors):
+
+  # feats.shape = batch x grid h x grid w x anchor_num x (1(delta x) + 1(delta y) + 1(width scale) + 1(height scale) + 1(object mask) + class_num(class probability))
+  # NOTE: box center absolute x = delta x + prior box upper left x, box center absolute y = delta y + prior box upper left y
+  # NOTE: width scale = box width / anchor width, height scale = box height / anchor height
+  tf.debugging.Assert(tf.math.logical_and(tf.equal(tf.shape(input_shape)[0],4), tf.equal(input_shape[2], 3)), [input_shape]);
+  tf.debugging.Assert(tf.equal(tf.shape(img_shape)[0],3), [img_shape]);
+  # anchors.shape = (3,2)
+  tf.debugging.Assert(tf.math.logical_and(tf.equal(tf.shape(anchors)[0], 3), tf.equal(tf.shape(anchors)[1], 2)), [anchors]);
+  feats = tf.keras.Input(input_shape);
+  # [x,y] = meshgrid(x,y) get the upper left positions of prior boxes
+  # grid.shape = (grid h, grid w, 1, 2)
+  grid_y = tf.keras.layers.Lambda(lambda x: tf.tile(tf.reshape(tf.range(tf.cast(tf.shape(x)[1], dtype = tf.float32), dtype = tf.float32), (-1, 1, 1, 1)), (1, tf.shape(x)[2], 1, 1)))(feats);
+  grid_x = tf.keras.layers.Lambda(lambda x: tf.tile(tf.reshape(tf.range(tf.cast(tf.shape(x)[2], dtype = tf.float32), dtype = tf.float32), (1, -1, 1, 1)), (tf.shape(x)[1], 1, 1, 1)))(feats);
+  grid = tf.keras.layers.Concatenate(axis = -1)([grid_x, grid_y]);
+  # box center proportional position = (delta x, delta y) + (priorbox upper left x,priorbox upper left y) / (feature map.width, feature map.height)
+  # box_xy.shape = (batch, grid h, grid w, anchor_num, 2)
+  box_xy = tf.keras.layers.Lambda(lambda x: (tf.math.sigmoid(x[0][...,0:2]) + x[1]) / tf.cast([tf.shape(x[1])[1], tf.shape(x[1])[0]], dtype = tf.float32))([feats, grid]);
+  # box proportional size = (width scale, height scale) * (anchor width, anchor height) / (image.width, image.height)
+  # box_wh.shape = (batch, grid h, grid w, anchor_num, 2)
+  box_wh = tf.keras.layers.Lambda(lambda x, y, z: tf.math.exp(x[...,2:4]) * y / tf.cast([z[1], z[0]], dtype = tf.float32), arguments = {'y': anchors, 'z': img_shape})(feats);
+  # confidence of being an object
+  box_confidence = tf.keras.layers.Lambda(lambda x: tf.math.sigmoid(x[..., 4]))(feats);
+  # class confidence
+  box_class_probs = tf.keras.layers.Lambda(lambda x: tf.math.sigmoid(x[..., 5:]))(feats);
+  return tf.keras.Model(inputs = feats, outputs = (box_xy, box_wh, box_confidence, box_class_probs));
+
+def Loss(img_shape, layer, class_num = 80, ignore_thresh = 0.5):
+
+  # outputs is a tuple
+  # outputs.shape[layer] = batch x h x w x anchor_num x (1(delta x) + 1(delta y) + 1(width scale) + 1(height scale) + 1(object mask) + class_num(class probability))
+  # labels is a tuple
+  # labels.shape[layer] = batch x h x w x anchor_num x (1(proportional x) + 1 (proportional y) + 1(proportional width) + 1(proportional height) + 1(object mask) + class_num(class probability))
+  # NOTE: the info carried by the output and the label is different.
+  assert layer in [0, 1, 2];
+  tf.debugging.Assert(tf.equal(tf.shape(img_shape)[0], 3), [img_shape]);
+  anchors = {2: [[10, 13], [16, 30], [33, 23]], 1: [[30, 61], [62, 45], [59, 119]], 0: [[116, 90], [156, 198], [373, 326]]};
+  input_shapes = [
+    (img_shape[0] // 32, img_shape[1] // 32, 3, 5 + class_num),
+    (img_shape[0] // 16, img_shape[1] // 16, 3, 5 + class_num),
+    (img_shape[0] // 8, img_shape[1] // 8, 3, 5 + class_num)
+  ];
+  input_shape_of_this_layer = input_shapes[layer];
+  anchors_of_this_layer = anchors[layer];
+  input_of_this_layer = tf.keras.Input(input_shape_of_this_layer);
+  label_of_this_layer = tf.keras.Input(input_shape_of_this_layer);
+  # 1) preprocess prediction
+  pred_xy, pred_wh, pred_box_confidence, pred_class = OutputParser(input_shape_of_this_layer, img_shape, anchors_of_this_layer)(input_of_this_layer);
+  pred_half_wh = tf.keras.layers.Lambda(lambda x: x / 2)(pred_wh);
+  pred_upperleft = tf.keras.layers.Lambda(lambda x: x[0] - x[1])([pred_xy, pred_half_wh]); # pred_upperleft.shape = (batch, grid h, grid w, anchor_num, 2) in sequence of (xmin, ymin)
+  pred_bottomright = tf.keras.layers.Lambda(lambda x: x[0] + x[1])([pred_xy, pred_half_wh]); # pred_bottomright.shape = (batch, grid h, grid w, anchor_num, 2) in sequence of (xmax, ymax)
+  pred_bbox = tf.keras.layers.Lambda(lambda x: tf.concat([tf.reverse(x[0], axis = [-1]), tf.reverse(x[1], axis = [-1])], axis = -1))([pred_upperleft, pred_bottomright]); # pred_bbox.shape = (batch, grid h, grid w, anchor_num, 4) in sequence of (ymin, xmin, ymax, xmax)
+  # 2) preprocess label
+  true_position = tf.keras.layers.Lambda(lambda x: x[..., 0:4])(label_of_this_layer); # true_box.shape = (batch, grid h, grid w, anchor_num, 4) in sequence of (center x, center y, w, h)
+  true_xy = tf.keras.layers.Lambda(lambda x: x[..., 0:2])(true_position); # true_xy.shape = (batch, grid h, grid w, anchor_num, 2)
+  true_wh = tf.keras.layers.Lambda(lambda x: x[..., 2:4])(true_position); # true_wh.shape = (batch, grid h, grid w, anchor_num, 2)
+  true_half_wh = tf.keras.layers.Lambda(lambda x: x[..., 2:4] / 2)(true_position); # true_half_wh.shape = (batch, grid h, grid w, anchor_num, 2)
+  true_upperleft = tf.keras.layers.Lambda(lambda x: x[0] - x[1])([true_xy, true_half_wh]); # true_upperleft.shape = (batch, grid h, grid w, anchor_num, 2) in sequence of (xmin, ymin)
+  true_bottomright = tf.keras.layers.Lambda(lambda x: x[0] + x[1])([true_xy, true_half_wh]); # true_bottomright.shape = (batch, grid h, grid w, anchor_num, 2) in sequence of (xmax, ymax)
+  object_mask = tf.keras.layers.Lambda(lambda x: x[..., 4])(label_of_this_layer); # object_mask.shape = (batch, grid h, grid w, anchor_num)
+    
+  object_mask_bool = tf.keras.layers.Lambda(lambda x: tf.cast(x, dtype = tf.bool))(object_mask); # object_mask_bool.shape = (batch, grid h, grid w, anchor_num)
+  true_bbox = tf.keras.layers.Lambda(lambda x: tf.concat([tf.reverse(x[0], axis = [-1]), tf.reverse(x[1], axis = [-1])], axis = -1))([true_upperleft, true_bottomright]); # true_bbox.shape = (batch, grid h, grid w, anchor_num, 4) in sequence of (ymin, xmin, ymax, xmax)
+  true_class = tf.keras.layers.Lambda(lambda x: x[..., 5:])(label_of_this_layer); # true_class.shape = (batch, grid h, grid w, anchor_num, class_num)
+  loss_scale = tf.keras.layers.Lambda(lambda x: 2 - x[..., 2] * x[..., 3])(true_position); # loss_scale.shape = (batch, grid h, grid w, anchor_num) punish harshly for smaller targets
+  # 3) ignore mask
+  def body(x):
+    true_bbox, object_mask_bool, pred_bbox = x;
+    # true_bbox.shape = (grid h, grid w, anchor_num, 4)
+    # object_mask_bool.shape = (grid h, grid w, anchor_num)
+    # pred_bbox.shape = (grid h, grid w, anchor_num, 4)
+    true_bbox_list = tf.boolean_mask(true_bbox, object_mask_bool); # true_bbox_list.shape = (obj_num, 4)
+    shape = tf.shape(pred_bbox)[:-1];
+    pred_bbox_list = tf.reshape(pred_bbox, (-1, 4));
+    bbox1_hw = true_bbox_list[..., 2:4] - true_bbox_list[..., 0:2]; # bbox1_hw.shape = (obj_num1, 2)
+    bbox1_area = bbox1_hw[..., 0] * bbox1_hw[..., 1]; # bbox1_area.shape = (obj_num1)
+    bbox2_hw = pred_bbox_list[..., 2:4] - pred_bbox_list[..., 0:2]; # bbox2_hw.shape = (obj_num2, 2)
+    bbox2_area = bbox2_hw[..., 0] * bbox2_hw[..., 1]; # bbox2_area.shape = (obj_num2)
+    intersect_min = tf.maximum(tf.expand_dims(true_bbox_list[..., 0:2], axis = 1), tf.expand_dims(pred_bbox_list[..., 0:2], axis = 0)); # intersect_min.shape = (obj_num1, obj_num2, 2)
+    intersect_max = tf.minimum(tf.expand_dims(true_bbox_list[..., 2:4], axis = 1), tf.expand_dims(pred_bbox_list[..., 2:4], axis = 0)); # intersect_max.shape = (obj_num1, obj_num2, 2)
+    intersect_hw = tf.maximum(intersect_max - intersect_min, 0); # intersect_hw.shape = (obj_num1, obj_num2, 2)
+    intersect_area = intersect_hw[..., 0] * intersect_hw[..., 1]; # intersect_area.shape = (obj_num1, obj_num2)
+    iou = intersect_area / tf.maximum(tf.expand_dims(bbox1_area, axis = 1) + tf.expand_dims(bbox2_area, axis = 0) - intersect_area, 1e-5); # iou.shape = (obj_num1, obj_num2)
+    iou = tf.reshape(iou, tf.concat([tf.shape(true_bbox_list)[0:1], tf.shape(pred_bbox)[:-1]], axis = 0)); # iou.shape = (obj_num, grid h, grid w, anchor_num)
+    best_iou = tf.math.reduce_max(iou, axis = 0); # iou.shape = (grid h, grid w, anchor_num)
+    ignore_mask = tf.where(tf.math.less(best_iou, ignore_thresh), tf.ones_like(best_iou), tf.zeros_like(best_iou)); # ignore_mask.shape = (grid h, grid w, anchor_num)
+    return ignore_mask;
+  ignore_mask = tf.keras.layers.Lambda(lambda x, s: tf.map_fn(body, x, fn_output_signature = tf.TensorSpec(shape = s[:3])), arguments = {'s': input_shape_of_this_layer})([true_bbox, object_mask_bool, pred_bbox]); # ignore_mask.shape = (batch, grid h, grid w, anchor_num)
+  # 4) position loss
+  # NOTE: only punish foreground area
+  # NOTE: punish smaller foreground targets more harshly
+  xy_loss = tf.keras.layers.Lambda(lambda x: x[0] * x[1] * tf.math.reduce_sum(tf.math.square(x[2] - x[3]), axis = -1))([object_mask, loss_scale, true_xy, pred_xy]); # xy_loss.shape = (batch, grid h, grid w, anchor_num)
+  wh_loss = tf.keras.layers.Lambda(lambda x: x[0] * x[1] * tf.math.reduce_sum(tf.math.square(x[2] - x[3]), axis = -1))([object_mask, loss_scale, true_wh, pred_wh]);
+  # 5) confidence loss
+  # NOTE: punish foreground area which is miss classified
+  # NOTE: and punish background area which is far from foreground area and miss classified
+  confidence_loss = tf.keras.layers.Lambda(lambda x: tf.math.pow(x[0] - x[1], 2) * (
+      x[0] * tf.keras.losses.BinaryCrossentropy(from_logits = False, reduction = tf.keras.losses.Reduction.NONE)(
+        tf.expand_dims(x[0], axis = -1), tf.expand_dims(x[1], axis = -1)
+      ) + \
+      (1. - x[0]) * x[2] * tf.keras.losses.BinaryCrossentropy(from_logits = False, reduction = tf.keras.losses.Reduction.NONE)(
+        tf.expand_dims(x[0], axis = -1), tf.expand_dims(x[1], axis = -1)
+      ))
+    )([object_mask, pred_box_confidence, ignore_mask]); # confidence_loss.shape = (batch, grid h, grid w, anchor_num)
+  # 6) class loss
+  # NOTE: only punish foreground area
+  class_loss = tf.keras.layers.Lambda(lambda x: 
+      x[0] * tf.math.reduce_mean(tf.keras.losses.BinaryCrossentropy(from_logits = False, reduction = tf.keras.losses.Reduction.NONE)(
+        tf.expand_dims(x[1], axis = -1), 
+        tf.expand_dims(x[2], axis = -1)
+      ), axis = -1)
+    )([object_mask, true_class, pred_class]); # class_loss.shape = (batch, grid h, grid w, anchor_num)
+  # 7) total
+  loss = tf.keras.layers.Lambda(lambda x: tf.math.reduce_mean(tf.math.reduce_sum(tf.math.add_n(x), axis = [1,2,3]), axis = [0]))([xy_loss, wh_loss, confidence_loss, class_loss]); # loss.shape = ()
+  return tf.keras.Model(inputs = (input_of_this_layer, label_of_this_layer), outputs = loss);
+
 if __name__ == "__main__":
   yolov5s = YOLOv5_small();
   yolov5s.save('yolov5s.h5');
