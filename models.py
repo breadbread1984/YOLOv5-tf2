@@ -70,12 +70,12 @@ def YOLOv5(input_shape = (608, 608, 3), class_num = 80, anchor_num = 3):
   pool2 = tf.keras.layers.MaxPool2D(pool_size = (9, 9), strides = (1, 1), padding = 'same')(large); # pool2.shape = (batch, h / 16, w / 16, 512)
   pool3 = tf.keras.layers.MaxPool2D(pool_size = (5, 5), strides = (1, 1), padding = 'same')(large); # pool3.shape = (batch, h / 16, w / 16, 512)
   results = tf.keras.layers.Concatenate(axis = -1)([pool1, pool2, pool3, large]); # results.shape = (batch, h / 16, w / 16, 2048)
-  results = ConvBlockMish(results.shape[1:], 512, (1, 1), (2, 2))(results); # results.shape = (batch, h / 32, w / 32, 512)
-  large_feature = ResBlock(results.shape[1:], filters = 512, blocks = 1, output_filters = 256, output_kernel = (1, 1))(results); # large_feature.shape = (batch, h / 32, w / 32, 256)
-  results = tf.keras.layers.UpSampling2D(2, interpolation = 'nearest')(large_feature); # results.shape = (batch, h / 16, w / 16, 256)
+  results = ConvBlockMish(results.shape[1:], 512, (1, 1))(results); # results.shape = (batch, h / 16, w / 16, 512)
+  large_feature = ResBlock(results.shape[1:], filters = 512, blocks = 1, output_filters = 256, output_kernel = (1, 1))(results); # large_feature.shape = (batch, h / 16, w / 16, 256)
+  results = tf.keras.layers.UpSampling2D(2, interpolation = 'nearest')(large_feature); # results.shape = (batch, h / 8, w / 8, 256)
   raw_middle_feature = ConvBlockLeakyReLU(results.shape[1:], 256, (1, 1))(middle); # raw_middle_feature.shape = (batch, h / 8, w / 8, 256)
-  results = tf.keras.layers.Concatenate(axis = -1)([results, raw_middle_feature]); # results.shape = (batch, )
-  results = ConvBlockLeakyReLU(results.shape[1:], 256, (1, 1))(results);
+  results = tf.keras.layers.Concatenate(axis = -1)([results, raw_middle_feature]); # results.shape = (batch, h / 8, w / 8, 512)
+  results = ConvBlockLeakyReLU(results.shape[1:], 256, (1, 1))(results); # results.shape = (batch, h / 8, w / 8, 256)
   middle_feature = ResBlock(results.shape[1:], filters = 256, blocks = 1, output_filters = 128, output_kernel = (1, 1))(results);
   results = tf.keras.layers.UpSampling2D(2, interpolation = 'nearest')(middle_feature);
   raw_small_feature = ConvBlockLeakyReLU(results.shape[1:], 128, (1, 1))(small); # raw_small_feature.shape = ()
