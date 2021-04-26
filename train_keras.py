@@ -14,6 +14,8 @@ environ['TF_ENABLE_AUTO_MIXED_PRECISION'] = '1';
 #os.environ['TF_CPP_MIN_VLOG_LEVEL'] = '3';
 #os.environ['CUDA_VISIBLE_DEVICES'] = '';
 batch_size = 4; # images of different sizes can't be stack into a batch
+trainset_size = 118287;
+testset_size = 5000;
 
 def main():
 
@@ -27,39 +29,6 @@ def main():
                                                                      'output2': lambda labels, outputs: loss2([outputs, labels]),
                                                                      'output3': lambda labels, outputs: loss3([outputs, labels])});
 
-  class SummaryCallback(tf.keras.callbacks.Callback):
-    def __init__(self, eval_freq = 100):
-      self.eval_freq = eval_freq;
-      testset = tf.data.TFRecordDataset(testset_filenames).map(parse_function).repeat(-1);
-      self.iter = iter(testset);
-      self.train_loss = tf.keras.metrics.Mean(name = 'train loss', dtype = tf.float32);
-      self.log = tf.summary.create_file_writer('./checkpoints');
-    def on_batch_begin(self, batch, logs = None):
-      pass;
-    def on_batch_end(self, batch, logs = None):
-      self.train_loss.update_state(logs['loss']);
-      if batch % self.eval_freq == 0:
-        image, bbox, labels = next(self.iter);
-        image = image.numpy().astype('uint8');
-        predictor = Predictor(yolov5l = yolov5l);
-        boundings = predictor.predict(image);
-        color_map = dict();
-        for bounding in boundings:
-          if bounding[5].numpy().astype('int32') not in color_map:
-            color_map[bounding[5].numpy().astype('int32')] = tuple(np.random.randint(low = 0, high = 256, size = (3,)).tolist());
-          clr = color_map[bounding[5].numpy().astype('int32')];
-          cv2.rectangle(image, tuple(bounding[0:2].numpy().astype('int32')), tuple(bounding[2:4].numpy().astype('int32')), clr, 1);
-          cv2.putText(image, predictor.getClsName(bounding[5].numpy().astype('int32')), tuple(bounding[0:2].numpy().astype('int32')), cv2.FONT_HERSHEY_PLAIN, 1, clr, 2);
-        image = tf.expand_dims(image, axis = 0);
-        with self.log.as_default():
-          tf.summary.scalar('train loss', self.train_loss.result(), step = optimizer.iterations);
-          tf.summary.image('detect', image[...,::-1], step = optimizer.iterations);
-        self.train_loss.reset_states();
-    def on_epoch_begin(self, epoch, logs = None):
-      pass;
-    def on_epoch_end(self, batch, logs = None):
-      pass;
-
   # load downloaded dataset
   trainset_filenames = [join('trainset', filename) for filename in listdir('trainset')];
   testset_filenames = [join('testset', filename) for filename in listdir('testset')];
@@ -68,9 +37,8 @@ def main():
   callbacks = [
     tf.keras.callbacks.TensorBoard(log_dir = './checkpoints'),
     tf.keras.callbacks.ModelCheckpoint(filepath = './checkpoints/ckpt', save_freq = 10000),
-    SummaryCallback(),
   ];
-  yolov5l.fit(trainset, epochs = 100, validation_data = testset, callbacks = callbacks);
+  yolov5l.fit(trainset, steps_per_epoch = ceil(trainset_size / batch_size), epochs = 100, validation_data = testset, validation_steps = ceil(testset_size / batch_size), callbacks = callbacks);
   yolov5l.save('yolov5l.h5');
 
 if __name__ == "__main__":

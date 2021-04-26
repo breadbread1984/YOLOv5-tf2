@@ -1,7 +1,6 @@
 #!/usr/bin/python3
 
 import tensorflow as tf;
-import tensorflow_addons as tfa;
 
 def ConvBlockMish(input_shape, filters, kernel_size, strides = (1, 1), activate = True, bn = True):
 
@@ -17,7 +16,7 @@ def ConvBlockMish(input_shape, filters, kernel_size, strides = (1, 1), activate 
   results = tf.keras.layers.Conv2D(filters, kernel_size = kernel_size, strides = strides, padding = padding, use_bias = not bn)(results);
   if bn == True: results = tf.keras.layers.BatchNormalization()(results);
   # NOTE: mish
-  if activate == True: results = tf.keras.layers.Lambda(lambda x: tfa.activations.mish(x))(results);
+  if activate == True: results = tf.keras.layers.Lambda(lambda x: x * tf.math.tanh(tf.math.softplus(x)))(results);
   return tf.keras.Model(inputs = inputs, outputs = results);
 
 def ConvBlockLeakyReLU(input_shape, filters, kernel_size, strides = (1, 1), activate = True, bn = True):
@@ -143,6 +142,76 @@ def OutputParser(input_shape, img_shape, anchors):
   box_class_probs = tf.keras.layers.Lambda(lambda x: tf.math.sigmoid(x[..., 5:]))(feats);
   return tf.keras.Model(inputs = feats, outputs = (box_xy, box_wh, box_confidence, box_class_probs));
 
+def giou_loss_fn(y_true, y_pred, mode = "giou"):
+    """Implements the GIoU loss function.
+    GIoU loss was first introduced in the
+    [Generalized Intersection over Union:
+    A Metric and A Loss for Bounding Box Regression]
+    (https://giou.stanford.edu/GIoU.pdf).
+    GIoU is an enhancement for models which use IoU in object detection.
+    Args:
+        y_true: true targets tensor. The coordinates of the each bounding
+            box in boxes are encoded as [y_min, x_min, y_max, x_max].
+        y_pred: predictions tensor. The coordinates of the each bounding
+            box in boxes are encoded as [y_min, x_min, y_max, x_max].
+        mode: one of ['giou', 'iou'], decided to calculate GIoU or IoU loss.
+    Returns:
+        GIoU loss float `Tensor`.
+    """
+    if mode not in ["giou", "iou"]:
+        raise ValueError("Value of mode should be 'iou' or 'giou'")
+    y_pred = tf.convert_to_tensor(y_pred)
+    if not y_pred.dtype.is_floating:
+        y_pred = tf.cast(y_pred, tf.float32)
+    y_true = tf.cast(y_true, y_pred.dtype)
+    giou = tf.squeeze(_calculate_giou(y_pred, y_true, mode))
+
+    return 1 - giou
+
+def _calculate_giou(b1, b2, mode = "giou"):
+    """
+    Args:
+        b1: bounding box. The coordinates of the each bounding box in boxes are
+            encoded as [y_min, x_min, y_max, x_max].
+        b2: the other bounding box. The coordinates of the each bounding box
+            in boxes are encoded as [y_min, x_min, y_max, x_max].
+        mode: one of ['giou', 'iou'], decided to calculate GIoU or IoU loss.
+    Returns:
+        GIoU loss float `Tensor`.
+    """
+    zero = tf.convert_to_tensor(0.0, b1.dtype)
+    b1_ymin, b1_xmin, b1_ymax, b1_xmax = tf.unstack(b1, 4, axis=-1)
+    b2_ymin, b2_xmin, b2_ymax, b2_xmax = tf.unstack(b2, 4, axis=-1)
+    b1_width = tf.maximum(zero, b1_xmax - b1_xmin)
+    b1_height = tf.maximum(zero, b1_ymax - b1_ymin)
+    b2_width = tf.maximum(zero, b2_xmax - b2_xmin)
+    b2_height = tf.maximum(zero, b2_ymax - b2_ymin)
+    b1_area = b1_width * b1_height
+    b2_area = b2_width * b2_height
+
+    intersect_ymin = tf.maximum(b1_ymin, b2_ymin)
+    intersect_xmin = tf.maximum(b1_xmin, b2_xmin)
+    intersect_ymax = tf.minimum(b1_ymax, b2_ymax)
+    intersect_xmax = tf.minimum(b1_xmax, b2_xmax)
+    intersect_width = tf.maximum(zero, intersect_xmax - intersect_xmin)
+    intersect_height = tf.maximum(zero, intersect_ymax - intersect_ymin)
+    intersect_area = intersect_width * intersect_height
+
+    union_area = b1_area + b2_area - intersect_area
+    iou = tf.math.divide_no_nan(intersect_area, union_area)
+    if mode == "iou":
+        return iou
+
+    enclose_ymin = tf.minimum(b1_ymin, b2_ymin)
+    enclose_xmin = tf.minimum(b1_xmin, b2_xmin)
+    enclose_ymax = tf.maximum(b1_ymax, b2_ymax)
+    enclose_xmax = tf.maximum(b1_xmax, b2_xmax)
+    enclose_width = tf.maximum(zero, enclose_xmax - enclose_xmin)
+    enclose_height = tf.maximum(zero, enclose_ymax - enclose_ymin)
+    enclose_area = enclose_width * enclose_height
+    giou = iou - tf.math.divide_no_nan((enclose_area - union_area), enclose_area)
+    return giou
+
 def Loss(img_shape, layer, class_num = 80, ignore_thresh = 0.5):
 
   # outputs is a tuple
@@ -202,11 +271,11 @@ def Loss(img_shape, layer, class_num = 80, ignore_thresh = 0.5):
     best_iou = tf.math.reduce_max(iou, axis = 0); # iou.shape = (grid h, grid w, anchor_num)
     ignore_mask = tf.where(tf.math.less(best_iou, ignore_thresh), tf.ones_like(best_iou), tf.zeros_like(best_iou)); # ignore_mask.shape = (grid h, grid w, anchor_num)
     return ignore_mask;
-  ignore_mask = tf.keras.layers.Lambda(lambda x, s: tf.map_fn(body, x, fn_output_signature = tf.TensorSpec(shape = s[:3])), arguments = {'s': input_shape_of_this_layer})([true_bbox, object_mask_bool, pred_bbox]); # ignore_mask.shape = (batch, grid h, grid w, anchor_num)
+  ignore_mask = tf.keras.layers.Lambda(lambda x, s: tf.map_fn(body, x, dtype = tf.float32), arguments = {'s': input_shape_of_this_layer})([true_bbox, object_mask_bool, pred_bbox]); # ignore_mask.shape = (batch, grid h, grid w, anchor_num)
   # 4) position loss
   # NOTE: only punish foreground area
   # NOTE: punish smaller foreground targets more harshly
-  giou_loss = tf.keras.layers.Lambda(lambda x: x[0] * x[1] * tfa.losses.GIoULoss(mode = 'iou', reduction = tf.keras.losses.Reduction.NONE)(x[2], x[3]))([object_mask, loss_scale, true_bbox, pred_bbox]); # giou_loss.shape = (batch, grid h, grid w, anchor_num)
+  giou_loss = tf.keras.layers.Lambda(lambda x: x[0] * x[1] * giou_loss_fn(x[2], x[3], mode = 'iou'))([object_mask, loss_scale, true_bbox, pred_bbox]); # giou_loss.shape = (batch, grid h, grid w, anchor_num)
   # 5) confidence loss
   # NOTE: punish foreground area which is miss classified
   # NOTE: and punish background area which is far from foreground area and miss classified
