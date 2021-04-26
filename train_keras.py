@@ -23,7 +23,7 @@ def main():
   loss1 = Loss((608,608,3,), 0, 80);
   loss2 = Loss((608,608,3,), 1, 80);
   loss3 = Loss((608,608,3,), 2, 80);
-  if exists('./checkpoints/ckpt'): yolov5l.load_weights('./checkpoints/ckpt/variables/variables');
+  if exists('./checkpoints/ckpt'): yolov5l.load_weights('./checkpoints/ckpt');
   optimizer = tf.keras.optimizers.Adam(1e-4);
   yolov5l.compile(optimizer = optimizer, loss = {'output1': lambda labels, outputs: loss1([outputs, labels]),
                                                                      'output2': lambda labels, outputs: loss2([outputs, labels]),
@@ -32,8 +32,8 @@ def main():
   # load downloaded dataset
   trainset_filenames = [join('trainset', filename) for filename in listdir('trainset')];
   testset_filenames = [join('testset', filename) for filename in listdir('testset')];
-  trainset = tf.data.TFRecordDataset(trainset_filenames).map(parse_function_generator(80)).shuffle(batch_size).batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE);
-  testset = tf.data.TFRecordDataset(testset_filenames).map(parse_function_generator(80)).shuffle(batch_size).batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE);
+  trainset = tf.data.TFRecordDataset(trainset_filenames).map(parse_function_generator(80)).repeat(-1).shuffle(batch_size).batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE);
+  testset = tf.data.TFRecordDataset(testset_filenames).map(parse_function_generator(80)).repeat(-1).shuffle(batch_size).batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE);
   callbacks = [
     tf.keras.callbacks.TensorBoard(log_dir = './checkpoints'),
     tf.keras.callbacks.ModelCheckpoint(filepath = './checkpoints/ckpt', save_freq = 10000),
