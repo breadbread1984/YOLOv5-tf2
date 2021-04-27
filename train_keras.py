@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-from os import environ, listdir;
+from os import environ, listdir, mkdir;
 from os.path import join, exists;
 import numpy as np;
 import cv2;
@@ -23,7 +23,8 @@ def main():
   loss1 = Loss((608,608,3,), 0, 80);
   loss2 = Loss((608,608,3,), 1, 80);
   loss3 = Loss((608,608,3,), 2, 80);
-  if exists('./checkpoints/ckpt'): yolov5l = tf.keras.models.load_model('./checkpoints/ckpt', custom_objects = {'tf': tf});
+  if exists('./checkpoints/ckpt'):
+    yolov5l.load_weights('./checkpoints/ckpt');
   optimizer = tf.keras.optimizers.Adam(1e-4);
   yolov5l.compile(optimizer = optimizer, loss = {'output1': lambda labels, outputs: loss1([outputs, labels]),
                                                                      'output2': lambda labels, outputs: loss2([outputs, labels]),
@@ -36,10 +37,12 @@ def main():
   testset = tf.data.TFRecordDataset(testset_filenames).map(parse_function_generator(80)).repeat(-1).shuffle(batch_size).batch(batch_size).prefetch(tf.data.experimental.AUTOTUNE);
   callbacks = [
     tf.keras.callbacks.TensorBoard(log_dir = './checkpoints'),
-    tf.keras.callbacks.ModelCheckpoint(filepath = './checkpoints/ckpt', save_freq = 10000),
+    tf.keras.callbacks.ModelCheckpoint(filepath = './checkpoints/ckpt', save_weights_only = True, save_freq = 10000),
   ];
   yolov5l.fit(trainset, steps_per_epoch = ceil(trainset_size / batch_size), epochs = 100, validation_data = testset, validation_steps = ceil(testset_size / batch_size), callbacks = callbacks);
-  yolov5l.save('yolov5l.h5');
+  if exists('trained_weights'): rmtree('trained_weights');
+  mkdir('trained_weights');
+  yolov5l.save_weights('yolov5l.h5', save_format = 'tf');
 
 if __name__ == "__main__":
   

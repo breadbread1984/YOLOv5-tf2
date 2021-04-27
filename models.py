@@ -301,10 +301,10 @@ def Loss(img_shape, layer, class_num = 80, ignore_thresh = 0.5):
 
 if __name__ == "__main__":
   yolov5s = YOLOv5_small();
-  yolov5s.save('yolov5s.h5');
+  yolov5s.save_weights('yolov5s', save_format = 'tf');
   yolov5m = YOLOv5_middle();
-  yolov5m.save('yolov5m.h5');
+  yolov5m.save_weights('yolov5m', save_format = 'tf');
   yolov5l = YOLOv5_large();
-  yolov5l.save('yolov5l.h5');
+  yolov5l.save_weights('yolov5l', save_format = 'tf');
   yolov5x = YOLOv5_extend();
-  yolov5x.save('yolov5x.h5');
+  yolov5x.save_weights('yolov5x', save_format = 'tf');
