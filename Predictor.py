@@ -16,15 +16,9 @@ class Predictor(object):
 
     if yolov5 is None:
       self.input_shape = input_shape;
-      if exists("yolov5.h5"):
-        # restore from serialized file
-        self.yolov5 = tf.keras.models.load_model('yolov5.h5', compile = False);
-      else:
-        # restore from checkpoint
-        self.yolov5 = YOLOv5(input_shape, class_num);
-        optimizer = tf.keras.optimizers.Adam(1e-4);
-        checkpoint = tf.train.Checkpoint(model = self.yolov5, optimizer = optimizer, optimizer_step = optimizer.iterations);
-        checkpoint.restore(tf.train.latest_checkpoint('checkpoints'));
+      # restore from checkpoint
+      self.yolov5 = YOLOv5(input_shape, class_num);
+      self.yolov5.load_weights('checkpoints/ckpt');
     else:
       self.input_shape = tuple(yolov5.input.shape[1:]);
       self.yolov5 = yolov5;
@@ -34,7 +28,7 @@ class Predictor(object):
 
     images = tf.expand_dims(image, axis = 0);
     resize_images = tf.image.resize(images, self.input_shape[:2], method = tf.image.ResizeMethod.BICUBIC, preserve_aspect_ratio = True);
-    resize_shape = resize_images.shape[1:3];
+    resize_shape = tf.shape(resize_images)[1:3];
     top_pad = (self.input_shape[0] - resize_shape[0]) // 2;
     bottom_pad = self.input_shape[0] - resize_shape[0] - top_pad;
     left_pad = (self.input_shape[1] - resize_shape[1]) // 2;
@@ -102,6 +96,7 @@ class Predictor(object):
 
 if __name__ == "__main__":
 
+  tf.enable_eager_execution();
   assert tf.executing_eagerly() == True;
   if len(sys.argv) != 2:
     print("Usage: " + sys.argv[0] + " <image>");
